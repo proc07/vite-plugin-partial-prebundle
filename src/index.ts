@@ -314,6 +314,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   const buildEntry = async (entry: string) => {
     const { hash, output: outFile, styleId, virtualId } = getEntryPaths(entry);
 
+    const isVue = entry.endsWith('.vue');
     const buildResult = await esbuild.build({
       absWorkingDir: root,
       entryPoints: [entry],
@@ -327,7 +328,8 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       write: false,
       metafile: true,
       external: options.external ?? DEFAULT_EXTERNAL,
-      plugins: [vueEsbuild({ sourceMap: false }), vueJsx()],
+      plugins: isVue ? [vueEsbuild({ sourceMap: false }), vueJsx()] : [],
+      jsx: isVue ? undefined : 'automatic',
       loader: {
         '.vue': 'ts',
         '.tsx': 'tsx',
@@ -346,16 +348,9 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       contents = `${styleInjector(styleId, cssText)}\n${contents}`;
     }
 
-    const isVue = entry.endsWith('.vue');
-    const hmrSnippet = isVue
-      ? buildVueHmrSnippet(entry, contents)
-      : [
-          `if (import.meta.hot) {`,
-          `  import.meta.hot.accept();`,
-          `}`,
-        ].join('\n');
-
-    contents = `${contents}\n${hmrSnippet}`;
+    if (isVue) {
+      contents = `${contents}\n${buildVueHmrSnippet(entry, contents)}`;
+    }
 
     await fs.mkdir(cacheBase, { recursive: true });
     await fs.writeFile(outFile, contents, 'utf8');
