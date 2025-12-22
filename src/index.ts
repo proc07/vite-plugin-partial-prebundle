@@ -23,6 +23,8 @@ type EntryMeta = {
   virtualId: string;
   styleId: string;
 };
+// Adjusting type for serialization (Set -> Array)
+type EntryMetaSerialized = Omit<EntryMeta, 'deps'> & { deps: string[] };
 
 const VIRTUAL_PREFIX = 'virtual:vp:';
 const DEFAULT_EXTERNAL = ['vue', 'react', 'react-dom'];
@@ -99,6 +101,35 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   const depToEntries = new Map<string, Set<string>>();
   const inflightBuilds = new Map<string, Promise<void>>();
 
+  const toRelative = (p: string): string => {
+    if (!p) return p;
+    const idx = p.indexOf(root);
+    if (idx === 0) {
+      return normalizePath(path.relative(root, p)) || '.';
+    }
+    if (idx > 0) {
+      const prefix = p.slice(0, idx);
+      const suffix = p.slice(idx);
+      return normalizePath(prefix + path.relative(root, suffix));
+    }
+    return normalizePath(p);
+  };
+
+  const toAbsolute = (p: string): string => {
+    if (!p) return p;
+    if (path.isAbsolute(p)) return normalizePath(p);
+    const colonIdx = p.indexOf(':');
+    if (colonIdx > 0 && colonIdx < p.length - 1) {
+      const prefix = p.slice(0, colonIdx + 1);
+      const tail = p.slice(colonIdx + 1);
+      const rebuilt = tail.startsWith('/')
+        ? tail
+        : normalizePath(path.join(root, tail));
+      return normalizePath(prefix + rebuilt);
+    }
+    return normalizePath(path.join(root, p));
+  };
+
   const resolveAbs = (p: string) =>
     normalizePath(path.isAbsolute(p) ? p : path.resolve(root, p));
 
@@ -162,25 +193,19 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
   const saveMetadata = async () => {
     if (!metadataPath) return;
-    const entries: Record<
-      string,
-      {
-        output: string;
-        deps: string[];
-        hash: string;
-        virtualId: string;
-        styleId: string;
-      }
-    > = {};
+
+    const entries: Record<string, EntryMetaSerialized> = {};
     for (const [entry, meta] of entryMeta) {
-      entries[entry] = {
-        output: meta.output,
-        deps: [...meta.deps],
+      const relEntry = toRelative(entry);
+      entries[relEntry] = {
+        output: toRelative(meta.output),
+        deps: [...meta.deps].map(toRelative),
         hash: meta.hash,
-        virtualId: meta.virtualId,
+        virtualId: toRelative(meta.virtualId),
         styleId: meta.styleId,
       };
     }
+
     const payload = JSON.stringify({ entries }, null, 2);
     await fs.mkdir(cacheBase, { recursive: true });
     await fs.writeFile(metadataPath, payload, 'utf8');
@@ -204,30 +229,29 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     try {
       const raw = await fs.readFile(metadataPath, 'utf8');
       const json = JSON.parse(raw) as {
-        entries?: Record<
-          string,
-          { output: string; deps: string[]; hash: string; virtualId: string; styleId: string }
-        >;
+        entries?: Record<string, EntryMetaSerialized>;
       };
 
       if (!json.entries) return;
 
-      for (const [entry, meta] of Object.entries(json.entries)) {
+      for (const [relEntry, meta] of Object.entries(json.entries)) {
+        const entry = toAbsolute(relEntry);
         if (!includes.has(entry)) continue;
 
         entryMeta.set(entry, {
-          output: meta.output,
-          deps: new Set(meta.deps ?? []),
+          output: toAbsolute(meta.output),
+          deps: new Set([...meta.deps].map(toAbsolute)),
           hash: meta.hash,
-          virtualId: meta.virtualId,
+          virtualId: toAbsolute(meta.virtualId),
           styleId: meta.styleId,
         });
 
         for (const dep of meta.deps ?? []) {
-          let bucket = depToEntries.get(dep);
+          const absDep = toAbsolute(dep);
+          let bucket = depToEntries.get(absDep);
           if (!bucket) {
             bucket = new Set();
-            depToEntries.set(dep, bucket);
+            depToEntries.set(absDep, bucket);
           }
           bucket.add(entry);
         }
