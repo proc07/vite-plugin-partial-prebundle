@@ -1,10 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 import { normalizePath } from 'vite';
 import * as esbuild from 'esbuild';
 import vueEsbuild from 'unplugin-vue/esbuild';
+import vueJsx from 'unplugin-vue-jsx/esbuild';
 
 export interface PartialPrebundleOptions {
   includes: string[];
@@ -22,7 +24,7 @@ type EntryMeta = {
   styleId: string;
 };
 
-const VIRTUAL_PREFIX = '\0vp:';
+const VIRTUAL_PREFIX = 'virtual:vp:';
 const DEFAULT_EXTERNAL = ['vue', 'react', 'react-dom'];
 
 const stripQuery = (id: string): string => id.split('?')[0];
@@ -45,10 +47,48 @@ const styleInjector = (styleId: string, css: string): string => {
   ].join('\n');
 };
 
+const buildVueHmrSnippet = (entry: string, code: string): string => {
+  const findDefaultRef = () => {
+    const m1 = code.match(/export\s+default\s+([A-Za-z0-9_$]+)/);
+    if (m1) return m1[1];
+    const m2 = code.match(/export\s+\{\s*([A-Za-z0-9_$]+)\s+as\s+default\s*\}/);
+    if (m2) return m2[1];
+    return null;
+  };
+
+  const defaultRef = findDefaultRef();
+  const hmrId = JSON.stringify(entry);
+  return [
+    `if (import.meta.hot) {`,
+    defaultRef
+      ? [
+          `  const __vp_component = typeof ${defaultRef} !== 'undefined' ? ${defaultRef} : undefined;`,
+          `  if (__vp_component && typeof __VUE_HMR_RUNTIME__ !== 'undefined') {`,
+          `    __vp_component.__hmrId = ${hmrId};`,
+          `    if (!__VUE_HMR_RUNTIME__.createRecord(${hmrId}, __vp_component)) {`,
+          `      __VUE_HMR_RUNTIME__.reload(${hmrId}, __vp_component);`,
+          `    }`,
+          `  }`,
+        ].join('\n')
+      : `  // no default export reference found for HMR bootstrap`,
+    `  import.meta.hot.accept((mod) => {`,
+    `    const __next = mod && mod.default;`,
+    `    if (__next && typeof __VUE_HMR_RUNTIME__ !== 'undefined') {`,
+    `      __next.__hmrId = ${hmrId};`,
+    `      __VUE_HMR_RUNTIME__.reload(${hmrId}, __next);`,
+    `    }`,
+    `  });`,
+    `}`,
+  ].join('\n');
+};
+
 export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   let config: ResolvedConfig;
   let root = '';
   let cacheBase = '';
+  let metadataPath = '';
+  // 多次并发写入导致内容被覆盖，改为串行写入
+  let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
 
   const includeRaw = options.includes ?? [];
@@ -112,18 +152,143 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     return deps;
   };
 
+  const getEntryPaths = (entry: string) => {
+    const hash = stableHash(entry);
+    const output = normalizePath(path.join(cacheBase, `vp-${hash}.js`));
+    const styleId = `vp-style-${hash}`;
+    const virtualId = `${VIRTUAL_PREFIX}${entry}.js`;
+    return { hash, output, styleId, virtualId };
+  };
+
+  const saveMetadata = async () => {
+    if (!metadataPath) return;
+    const entries: Record<
+      string,
+      {
+        output: string;
+        deps: string[];
+        hash: string;
+        virtualId: string;
+        styleId: string;
+      }
+    > = {};
+    for (const [entry, meta] of entryMeta) {
+      entries[entry] = {
+        output: meta.output,
+        deps: [...meta.deps],
+        hash: meta.hash,
+        virtualId: meta.virtualId,
+        styleId: meta.styleId,
+      };
+    }
+    const payload = JSON.stringify({ entries }, null, 2);
+    await fs.mkdir(cacheBase, { recursive: true });
+    await fs.writeFile(metadataPath, payload, 'utf8');
+  };
+
+  // 串行执行写入
+  const queueMetadataSave = () => {
+    metadataWrite = metadataWrite
+      .then(() => saveMetadata())
+      .catch((err) => {
+        config?.logger.warn?.(
+          `[vite-plugin-partial-prebundle] failed to write metadata: ${String(
+            err?.message || err,
+          )}`,
+        );
+      });
+    return metadataWrite;
+  };
+
+  const loadMetadata = async () => {
+    try {
+      const raw = await fs.readFile(metadataPath, 'utf8');
+      const json = JSON.parse(raw) as {
+        entries?: Record<
+          string,
+          { output: string; deps: string[]; hash: string; virtualId: string; styleId: string }
+        >;
+      };
+
+      if (!json.entries) return;
+
+      for (const [entry, meta] of Object.entries(json.entries)) {
+        if (!includes.has(entry)) continue;
+
+        entryMeta.set(entry, {
+          output: meta.output,
+          deps: new Set(meta.deps ?? []),
+          hash: meta.hash,
+          virtualId: meta.virtualId,
+          styleId: meta.styleId,
+        });
+
+        for (const dep of meta.deps ?? []) {
+          let bucket = depToEntries.get(dep);
+          if (!bucket) {
+            bucket = new Set();
+            depToEntries.set(dep, bucket);
+          }
+          bucket.add(entry);
+        }
+      }
+    } catch {
+      // ignore missing/invalid metadata
+    }
+  };
+
   const collectCss = (files: esbuild.OutputFile[]): string => {
+    const stripSourceMap = (css: string) =>
+      css
+        // Strip both block and line sourceMappingURL comments to avoid PostCSS errors
+        .replace(
+          /\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/|^[ \t]*\/\/[#@]\s*sourceMappingURL=.*$/gm,
+          '',
+        )
+        .trim();
+
     return files
       .filter((file) => file.path.endsWith('.css'))
-      .map((file) => file.text)
+      .map((file) => stripSourceMap(file.text))
+      .filter(Boolean)
       .join('\n');
   };
 
+  const hydrateLineText = (errors: esbuild.PartialMessage[]) => {
+    for (const msg of errors) {
+      const loc = msg.location;
+      if (!loc || loc.lineText) continue;
+      try {
+        const filePath = path.isAbsolute(loc.file)
+          ? loc.file
+          : path.resolve(root, loc.file);
+        const contents = readFileSync(filePath, 'utf8');
+        const lines = contents.split(/\r?\n/);
+        const idx = (loc.line ?? 1) - 1;
+        if (lines[idx]) loc.lineText = lines[idx];
+      } catch {
+        // do nothing
+      }
+    }
+  };
+
+  const formatBuildError = (failure: esbuild.BuildFailure): string => {
+    if (failure && typeof failure === 'object' && 'errors' in failure) {
+      hydrateLineText(failure.errors ?? []);
+      const messages = esbuild.formatMessagesSync(failure.errors, {
+        kind: 'error',
+        color: false,
+      });
+      return messages.filter(Boolean).join('\n');
+    }
+
+    return typeof failure?.message === 'string'
+        ? failure.message
+        : JSON.stringify(failure, null, 2);
+  };
+
   const buildEntry = async (entry: string) => {
-    const hash = stableHash(entry);
-    const outFile = normalizePath(path.join(cacheBase, `vp-${hash}.js`));
-    const styleId = `vp-style-${hash}`;
-    const virtualId = `${VIRTUAL_PREFIX}${entry}`;
+    const { hash, output: outFile, styleId, virtualId } = getEntryPaths(entry);
 
     const buildResult = await esbuild.build({
       absWorkingDir: root,
@@ -134,11 +299,11 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       platform: 'browser',
       target: 'esnext',
       splitting: false,
-      sourcemap: false,
+      sourcemap: 'inline',
       write: false,
       metafile: true,
       external: options.external ?? DEFAULT_EXTERNAL,
-      plugins: [vueEsbuild()],
+      plugins: [vueEsbuild({ sourceMap: false }), vueJsx()],
       loader: {
         '.vue': 'ts',
         '.tsx': 'tsx',
@@ -157,6 +322,17 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       contents = `${styleInjector(styleId, cssText)}\n${contents}`;
     }
 
+    const isVue = entry.endsWith('.vue');
+    const hmrSnippet = isVue
+      ? buildVueHmrSnippet(entry, contents)
+      : [
+          `if (import.meta.hot) {`,
+          `  import.meta.hot.accept();`,
+          `}`,
+        ].join('\n');
+
+    contents = `${contents}\n${hmrSnippet}`;
+
     await fs.mkdir(cacheBase, { recursive: true });
     await fs.writeFile(outFile, contents, 'utf8');
 
@@ -170,21 +346,25 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       virtualId,
       styleId,
     });
+    await queueMetadataSave();
   };
 
   const ensureBuild = async (entry: string) => {
     let build = inflightBuilds.get(entry);
+
     if (!build) {
       build = buildEntry(entry)
         .catch((err) => {
-          config?.logger.error(
-            `[vite-plugin-partial-prebundle] ${String(err.message || err)}`,
-          );
-          throw err;
+          const message = formatBuildError(err);
+          config?.logger.error(`[vite-plugin-partial-prebundle] ${message}`);
+
+          throw new Error(message);
         })
         .finally(() => inflightBuilds.delete(entry));
+
       inflightBuilds.set(entry, build);
     }
+
     return build;
   };
 
@@ -253,7 +433,11 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         options.cacheDir ??
           path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), 'code-partial'),
       );
+      metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
+
       refreshEntrySets();
+      loadMetadata().catch(() => {});
+
       if (!includes.size) {
         resolved.logger.warn(
           '[vite-plugin-partial-prebundle] `includes` is empty, plugin is idle.',
@@ -261,37 +445,41 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       }
     },
 
-    configureServer(devServer) {
-      if (!serveMode) return;
-      buildAll().catch((err) => {
-        config.logger.error(
-          `[vite-plugin-partial-prebundle] initial build failed: ${String(
-            err.message || err,
-          )}`,
-        );
-      });
-    },
-
     async resolveId(source, importer, options) {
       if (!serveMode || options?.ssr) return null;
       const entry = await matchEntry(source, importer, this.resolve, this);
+
       if (!entry) return null;
-      await ensureBuild(entry);
-      return `${VIRTUAL_PREFIX}${entry}`;
+
+      return `${VIRTUAL_PREFIX}${entry}.js`;
     },
 
     async load(id) {
       if (!serveMode || !id.startsWith(VIRTUAL_PREFIX)) return null;
-      const entry = id.slice(VIRTUAL_PREFIX.length);
+      
+      const request = id.slice(VIRTUAL_PREFIX.length);
+      const entry = request.endsWith('.js')
+        ? request.slice(0, -3)
+        : request;
+
       if (!includes.has(entry)) return null;
-      await ensureBuild(entry);
+
       const meta = entryMeta.get(entry);
-      if (!meta) return null;
-      return fs.readFile(meta.output, 'utf8');
+      if (!meta) {
+        await ensureBuild(entry);
+      };
+
+      const output = meta?.output || entryMeta.get(entry)?.output;
+      if (!output) {
+        return null;
+      }
+
+      return await fs.readFile(output, 'utf8');
     },
 
     async handleHotUpdate(ctx) {
       if (!serveMode) return;
+
       const file = normalizePath(ctx.file);
       const targets = depToEntries.get(file);
       if (!targets || targets.size === 0) return;
