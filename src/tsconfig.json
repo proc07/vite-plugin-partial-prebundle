@@ -9,8 +9,8 @@
     "skipLibCheck": true,
     "declaration": true,
     "outDir": "dist",
-    "types": ["node"],
+    "types": ["node", "vitest/globals"],
     "strict": false
   },
-  "include": ["./index.ts"]
+  "include": ["./index.ts", "__tests__/**/*.ts"]
 }

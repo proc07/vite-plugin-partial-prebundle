@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import glob from 'fast-glob';
 import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 import { normalizePath } from 'vite';
 import * as esbuild from 'esbuild';
@@ -95,10 +96,10 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
   const includeRaw = options.includes ?? [];
   const excludeRaw = options.excludes ?? [];
-  const includes = new Set<string>();
-  const excludes = new Set<string>();
+  const targetEntries = new Set<string>();
   const entryMeta = new Map<string, EntryMeta>();
   const depToEntries = new Map<string, Set<string>>();
+  // 防止同一个入口被并发重复构建
   const inflightBuilds = new Map<string, Promise<void>>();
 
   const toRelative = (p: string): string => {
@@ -133,17 +134,24 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   const resolveAbs = (p: string) =>
     normalizePath(path.isAbsolute(p) ? p : path.resolve(root, p));
 
-  const refreshEntrySets = () => {
-    excludes.clear();
-    excludeRaw.forEach((p) => excludes.add(resolveAbs(p)));
+  const expandPatterns = async (patterns: string[]): Promise<Set<string>> => {
+    if (!patterns.length) return new Set<string>();
+    const matches = await glob(patterns, {
+      cwd: root,
+      absolute: true,
+      onlyFiles: true,
+      dot: true,
+    });
+    return new Set(matches.map((m) => normalizePath(resolveAbs(m))));
+  };
 
-    includes.clear();
-    for (const inc of includeRaw) {
-      const abs = resolveAbs(inc);
-      if (!excludes.has(abs)) {
-        includes.add(abs);
-      }
-    }
+  const refreshEntryTargets = async () => {
+    targetEntries.clear();
+    const includeSet = await expandPatterns(includeRaw);
+    const excludeSet = await expandPatterns(excludeRaw);
+    includeSet.forEach((p) => {
+      if (!excludeSet.has(p)) targetEntries.add(p);
+    });
   };
 
   const updateDepIndex = (entry: string, deps: Set<string>) => {
@@ -236,7 +244,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
       for (const [relEntry, meta] of Object.entries(json.entries)) {
         const entry = toAbsolute(relEntry);
-        if (!includes.has(entry)) continue;
+        if (!targetEntries.has(entry)) continue;
 
         entryMeta.set(entry, {
           output: toAbsolute(meta.output),
@@ -264,6 +272,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   const collectCss = (files: esbuild.OutputFile[]): string => {
     const stripSourceMap = (css: string) =>
       css
+        // esbuild 0.24 生成的 CSS sourcemap 注释样式变了（//# sourceMappingURL=...）
         // Strip both block and line sourceMappingURL comments to avoid PostCSS errors
         .replace(
           /\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/|^[ \t]*\/\/[#@]\s*sourceMappingURL=.*$/gm,
@@ -311,10 +320,30 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         : JSON.stringify(failure, null, 2);
   };
 
+  const removeEntry = async (entry: string) => {
+    const meta = entryMeta.get(entry);
+    if (!meta) return;
+
+    entryMeta.delete(entry);
+
+    for (const dep of meta.deps) {
+      const bucket = depToEntries.get(dep);
+      if (!bucket) continue;
+      bucket.delete(entry);
+      if (bucket.size === 0) depToEntries.delete(dep);
+    }
+    try {
+      await fs.unlink(meta.output);
+    } catch {
+      // ignore
+    }
+    queueMetadataSave();
+  };
+
   const buildEntry = async (entry: string) => {
     const { hash, output: outFile, styleId, virtualId } = getEntryPaths(entry);
-
     const isVue = entry.endsWith('.vue');
+
     const buildResult = await esbuild.build({
       absWorkingDir: root,
       entryPoints: [entry],
@@ -388,8 +417,8 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   };
 
   const buildAll = async () => {
-    if (!includes.size) return;
-    await Promise.all([...includes].map((entry) => ensureBuild(entry)));
+    if (!targetEntries.size) return;
+    await Promise.all([...targetEntries].map((entry) => ensureBuild(entry)));
   };
 
   const matchEntry = async (
@@ -401,7 +430,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     const check = (candidate: string | null | undefined) => {
       if (!candidate) return null;
       const normalized = normalizePath(candidate);
-      return includes.has(normalized) ? normalized : null;
+      return targetEntries.has(normalized) ? normalized : null;
     };
 
     if (path.isAbsolute(source)) {
@@ -444,7 +473,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     apply: 'serve',
     enforce: 'pre',
 
-    configResolved(resolved) {
+    async configResolved(resolved) {
       config = resolved;
       serveMode = resolved.command === 'serve';
       root = normalizePath(resolved.root);
@@ -454,10 +483,24 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
 
-      refreshEntrySets();
-      loadMetadata().catch(() => {});
+      await refreshEntryTargets();
+      await loadMetadata().catch((err) => {
+        config?.logger.error(`[vite-plugin-partial-prebundle] ${err?.message || err}`);
+      });
 
-      if (!includes.size) {
+      // Remove stale entries
+      const stale = [...entryMeta.keys()].filter((e) => !targetEntries.has(e));
+      await Promise.all(stale.map((e) => removeEntry(e)));
+
+      // 如果关闭服务后，entryMeta 就丢失了，无法del 掉旧的文件
+
+      // Build missing entries
+      const missing = [...targetEntries].filter((e) => !entryMeta.has(e));
+      if (missing.length) {
+        await Promise.all(missing.map((e) => ensureBuild(e)));
+      }
+
+      if (!targetEntries.size) {
         resolved.logger.warn(
           '[vite-plugin-partial-prebundle] `includes` is empty, plugin is idle.',
         );
@@ -481,7 +524,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         ? request.slice(0, -3)
         : request;
 
-      if (!includes.has(entry)) return null;
+      if (!targetEntries.has(entry)) return null;
 
       const meta = entryMeta.get(entry);
       if (!meta) {
