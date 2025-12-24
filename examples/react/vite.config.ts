@@ -11,7 +11,7 @@ export default defineConfig({
       excludes: [
         'src/components/ContactForm.tsx',
         'src/components/SignupForm.tsx',
-        'src/components/StepsTimeline.tsx',
+        // 'src/components/StepsTimeline.tsx',
       ]
     }),
     react(),

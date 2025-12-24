@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { CSSProperties, ChangeEvent } from 'react';
+import StatsPanel from './StatsPanel';
 
 export default function SearchBar() {
+  console.log('SearchBar rendered -> used child component StatsPanel');
   const [q, setQ] = useState('');
   const [history, setHistory] = useState<string[]>([]);
 
@@ -37,6 +39,7 @@ export default function SearchBar() {
           </div>
         </div>
       )}
+      <StatsPanel />
     </div>
   );
 }

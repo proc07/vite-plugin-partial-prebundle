@@ -1,6 +1,10 @@
 import type { CSSProperties } from 'react';
+import { cloneDeep, isObject } from 'lodash';
 
 export default function HeroBanner() {
+  // add lodash usage to test prebundle
+  console.log('HeroBanner rendered -> used lodash', cloneDeep({ a: 1, b: { c: 2 } }), isObject({ a: 1 }))
+
   return (
     <section style={wrap}>
       <div>

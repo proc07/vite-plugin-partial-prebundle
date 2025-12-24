@@ -2,15 +2,13 @@ import ContactForm from './components/ContactForm';
 import SignupForm from './components/SignupForm';
 import Checklist from './components/Checklist';
 import HeroBanner from './components/HeroBanner';
-import NotificationList from './components/NotificationList';
 import PricingCard from './components/PricingCard';
 import ProfileCard from './components/ProfileCard';
 import SearchBar from './components/SearchBar';
-import StatsPanel from './components/StatsPanel';
 import StepsTimeline from './components/StepsTimeline';
 import TagInput from './components/TagInput';
-import TodoBoard from './components/TodoBoard';
 import UploadCard from './components/UploadCard';
+import StatsPanel from './components/StatsPanel';
 
 export default function App() {
   return (
@@ -23,8 +21,6 @@ export default function App() {
         <ContactForm />
         <ProfileCard />
         <PricingCard />
-        <TodoBoard />
-        <NotificationList />
         <Checklist />
         {/* 这3个组件没有调用，但还是需要预打包 */}
         {/* <TagInput />
