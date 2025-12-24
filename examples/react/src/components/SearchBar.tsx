@@ -39,7 +39,7 @@ export default function SearchBar() {
           </div>
         </div>
       )}
-      <StatsPanel />
+      <StatsPanel from="search bar" />
     </div>
   );
 }

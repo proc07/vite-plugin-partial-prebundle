@@ -6,7 +6,8 @@ const metrics = [
   { label: '转化率', value: '12.4%', trend: '+0.6%' },
 ];
 
-export default function StatsPanel() {
+export default function StatsPanel({ from }: { from: string }) {
+  console.log('StatsPanel rendered', from);
   return (
     <div style={panel}>
       {metrics.map((m) => (

@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -8,6 +7,10 @@ import { normalizePath } from 'vite';
 import * as esbuild from 'esbuild';
 import vueEsbuild from 'unplugin-vue/esbuild';
 import vueJsx from 'unplugin-vue-jsx/esbuild';
+import {collectCss} from './utils/css.js'
+import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
+import type {EntryMeta, EntryMetaSerialized} from './types.js'
+import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
 
 export interface PartialPrebundleOptions {
   includes: string[];
@@ -17,73 +20,7 @@ export interface PartialPrebundleOptions {
   external?: string[];
 }
 
-type EntryMeta = {
-  output: string;
-  deps: Set<string>;
-  hash: string;
-  virtualId: string;
-  styleId: string;
-};
-// Adjusting type for serialization (Set -> Array)
-type EntryMetaSerialized = Omit<EntryMeta, 'deps'> & { deps: string[] };
-
 const VIRTUAL_PREFIX = 'virtual:vp:';
-const DEFAULT_EXTERNAL = ['vue', 'react', 'react-dom'];
-
-const stripQuery = (id: string): string => id.split('?')[0];
-
-const stableHash = (input: string): string => {
-  return crypto.createHash('md5').update(input).digest('hex').slice(0, 8);
-};
-
-const styleInjector = (styleId: string, css: string): string => {
-  const styleContent = JSON.stringify(css);
-  const styleKey = JSON.stringify(styleId);
-  return [
-    `const __vp_style = ${styleContent};`,
-    `if (typeof document !== 'undefined' && !document.getElementById(${styleKey})) {`,
-    `  const el = document.createElement('style');`,
-    `  el.id = ${styleKey};`,
-    `  el.textContent = __vp_style;`,
-    `  document.head.appendChild(el);`,
-    `}`,
-  ].join('\n');
-};
-
-const buildVueHmrSnippet = (entry: string, code: string): string => {
-  const findDefaultRef = () => {
-    const m1 = code.match(/export\s+default\s+([A-Za-z0-9_$]+)/);
-    if (m1) return m1[1];
-    const m2 = code.match(/export\s+\{\s*([A-Za-z0-9_$]+)\s+as\s+default\s*\}/);
-    if (m2) return m2[1];
-    return null;
-  };
-
-  const defaultRef = findDefaultRef();
-  const hmrId = JSON.stringify(entry);
-  return [
-    `if (import.meta.hot) {`,
-    defaultRef
-      ? [
-          `  const __vp_component = typeof ${defaultRef} !== 'undefined' ? ${defaultRef} : undefined;`,
-          `  if (__vp_component && typeof __VUE_HMR_RUNTIME__ !== 'undefined') {`,
-          `    __vp_component.__hmrId = ${hmrId};`,
-          `    if (!__VUE_HMR_RUNTIME__.createRecord(${hmrId}, __vp_component)) {`,
-          `      __VUE_HMR_RUNTIME__.reload(${hmrId}, __vp_component);`,
-          `    }`,
-          `  }`,
-        ].join('\n')
-      : `  // no default export reference found for HMR bootstrap`,
-    `  import.meta.hot.accept((mod) => {`,
-    `    const __next = mod && mod.default;`,
-    `    if (__next && typeof __VUE_HMR_RUNTIME__ !== 'undefined') {`,
-    `      __next.__hmrId = ${hmrId};`,
-    `      __VUE_HMR_RUNTIME__.reload(${hmrId}, __next);`,
-    `    }`,
-    `  });`,
-    `}`,
-  ].join('\n');
-};
 
 export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   let config: ResolvedConfig;
@@ -93,6 +30,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   // 多次并发写入导致内容被覆盖，改为串行写入
   let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
+  let externalPkgs: string[] = [];
 
   const includeRaw = options.includes ?? [];
   const excludeRaw = options.excludes ?? [];
@@ -156,6 +94,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
   const updateDepIndex = (entry: string, deps: Set<string>) => {
     const prev = entryMeta.get(entry)?.deps ?? new Set<string>();
+
     for (const oldDep of prev) {
       if (!deps.has(oldDep)) {
         const bucket = depToEntries.get(oldDep);
@@ -179,6 +118,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     metafile?: esbuild.Metafile,
   ): Set<string> => {
     const deps = new Set<string>();
+
     if (metafile?.inputs) {
       for (const input of Object.keys(metafile.inputs)) {
         const abs = path.isAbsolute(input)
@@ -244,7 +184,6 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
       for (const [relEntry, meta] of Object.entries(json.entries)) {
         const entry = toAbsolute(relEntry);
-        if (!targetEntries.has(entry)) continue;
 
         entryMeta.set(entry, {
           output: toAbsolute(meta.output),
@@ -267,24 +206,6 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     } catch {
       // ignore missing/invalid metadata
     }
-  };
-
-  const collectCss = (files: esbuild.OutputFile[]): string => {
-    const stripSourceMap = (css: string) =>
-      css
-        // esbuild 0.24 生成的 CSS sourcemap 注释样式变了（//# sourceMappingURL=...）
-        // Strip both block and line sourceMappingURL comments to avoid PostCSS errors
-        .replace(
-          /\/\*[#@]\s*sourceMappingURL=[\s\S]*?\*\/|^[ \t]*\/\/[#@]\s*sourceMappingURL=.*$/gm,
-          '',
-        )
-        .trim();
-
-    return files
-      .filter((file) => file.path.endsWith('.css'))
-      .map((file) => stripSourceMap(file.text))
-      .filter(Boolean)
-      .join('\n');
   };
 
   const hydrateLineText = (errors: esbuild.PartialMessage[]) => {
@@ -344,6 +265,34 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     const { hash, output: outFile, styleId, virtualId } = getEntryPaths(entry);
     const isVue = entry.endsWith('.vue');
 
+    // 为避免组件间互相内嵌，检测到 import 指向其他 targetEntries，会将该导入重写为 virtual:vp:<abs>.js 并标记 external。
+    const entryLinkerPlugin: esbuild.Plugin = {
+      name: 'vp-entry-linker',
+      setup(build) {
+        build.onResolve({ filter: /.*/ }, (args) => {
+          if (!args.importer) return null;
+
+          const base = path.dirname(args.importer);
+          const resolved = normalizePath(
+            path.isAbsolute(args.path)
+              ? args.path
+              : path.resolve(base, args.path),
+          );
+
+          const targetPath = Array.from(targetEntries).find(key => key.includes(resolved))
+          console.log('targetPath', targetPath)
+          if (targetPath) {
+            return {
+              path: targetPath,
+              external: true,
+            };
+          }
+
+          return null;
+        });
+      },
+    };
+
     const buildResult = await esbuild.build({
       absWorkingDir: root,
       entryPoints: [entry],
@@ -356,8 +305,11 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       sourcemap: 'inline',
       write: false,
       metafile: true,
-      external: options.external ?? DEFAULT_EXTERNAL,
-      plugins: isVue ? [vueEsbuild({ sourceMap: false }), vueJsx()] : [],
+      external: externalPkgs,
+      plugins: [
+        entryLinkerPlugin,
+        ...(isVue ? [vueEsbuild({ sourceMap: false }), vueJsx()] : []),
+      ],
       jsx: isVue ? undefined : 'automatic',
       loader: {
         '.vue': 'ts',
@@ -482,6 +434,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), 'code-partial'),
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
+      externalPkgs = await resolveExternalPkgs(root, options.external);
 
       await refreshEntryTargets();
       await loadMetadata().catch((err) => {
@@ -491,8 +444,6 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       // Remove stale entries
       const stale = [...entryMeta.keys()].filter((e) => !targetEntries.has(e));
       await Promise.all(stale.map((e) => removeEntry(e)));
-
-      // 如果关闭服务后，entryMeta 就丢失了，无法del 掉旧的文件
 
       // Build missing entries
       const missing = [...targetEntries].filter((e) => !entryMeta.has(e));
@@ -509,8 +460,9 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
     async resolveId(source, importer, options) {
       if (!serveMode || options?.ssr) return null;
-      const entry = await matchEntry(source, importer, this.resolve, this);
+      if (source.startsWith(VIRTUAL_PREFIX)) return source;
 
+      const entry = await matchEntry(source, importer, this.resolve, this);
       if (!entry) return null;
 
       return `${VIRTUAL_PREFIX}${entry}.js`;
@@ -518,7 +470,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
     async load(id) {
       if (!serveMode || !id.startsWith(VIRTUAL_PREFIX)) return null;
-      
+
       const request = id.slice(VIRTUAL_PREFIX.length);
       const entry = request.endsWith('.js')
         ? request.slice(0, -3)
