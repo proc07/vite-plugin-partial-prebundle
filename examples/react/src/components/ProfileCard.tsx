@@ -1,8 +1,9 @@
 import type { CSSProperties } from 'react';
+import {styles} from '../common.styled'
 
 export default function ProfileCard() {
   return (
-    <div style={card}>
+    <div style={card} styles={styles.list}>
       <div style={avatar}>JS</div>
       <div>
         <div style={title}>Jessie Song</div>

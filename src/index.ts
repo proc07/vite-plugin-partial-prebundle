@@ -12,7 +12,6 @@ import {collectCss} from './utils/css.js'
 import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
 import type {EntryMeta, EntryMetaSerialized} from './types.js'
 import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
-import { console } from 'node:inspector';
 
 export interface PartialPrebundleOptions {
   includes: string[];
@@ -32,7 +31,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   // 多次并发写入导致内容被覆盖，改为串行写入
   let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
-  let externalPkgs: string[] = [];
+  let externalPkgs: string[] = ['react/jsx-runtime'];
 
   const includeRaw = options.includes ?? [];
   const excludeRaw = options.excludes ?? [];
@@ -268,32 +267,38 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     const isVue = entry.endsWith('.vue');
 
     // 为避免组件间互相内嵌，检测到 import 指向其他 targetEntries，会将该导入重写为 virtual:vp:<abs>.js 并标记 external。
+    const ENTRY_EXTS = ['.ts', '.tsx', '.jsx', '.vue', '.js', '.mjs', '.cjs'];
     const entryLinkerPlugin: esbuild.Plugin = {
       name: 'vp-entry-linker',
       setup(build) {
-        build.onResolve({ filter: /.*/ }, (args) => {
+        build.onResolve({ filter: /.*/ }, async (args) => {
           if (!args.importer) return null;
+          if (externalPkgs.includes(args.path)) return null;
 
           const base = path.dirname(args.importer);
-          const resolved = normalizePath(
+          const rawPath = normalizePath(
             path.isAbsolute(args.path)
               ? args.path
               : path.resolve(base, args.path),
           );
 
-          if (ASSET_EXTENSIONS.some(ext => resolved.endsWith(`.${ext}`))) {
-            return {
-              path: resolved,
-              external: true,
-            };
+          if (ASSET_EXTENSIONS.some((ext) => rawPath.endsWith(`.${ext}`))) {
+            return { path: rawPath, external: true };
           }
 
-          const targetPath = Array.from(targetEntries).find(key => key.includes(resolved))
+          const targetPath = Array.from(targetEntries).find(key => key.includes(rawPath))
           if (targetPath) {
-            return {
-              path: targetPath,
-              external: true,
-            };
+            return { path: targetPath, external: true };
+          }
+
+          const candidates = ENTRY_EXTS.map((ext) => `${rawPath}${ext}`);
+          for (const candidate of candidates) {
+            try {
+              await fs.access(candidate);
+              return { path: candidate, external: true };
+            } catch {
+              // not found, continue
+            }
           }
 
           return null;
@@ -445,7 +450,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), VITE_CACHE_DIR),
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
-      externalPkgs = await resolveExternalPkgs(root, options.external);
+      externalPkgs = await resolveExternalPkgs(root, [...externalPkgs, ...options.external ?? []]);
 
       await refreshEntryTargets();
       await loadMetadata().catch((err) => {
