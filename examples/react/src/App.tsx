@@ -1,8 +1,7 @@
 import ContactForm from './components/ContactForm';
 import SignupForm from './components/SignupForm';
-import Checklist from './components/Checklist';
+import LoadingResources from './components/LoadingResources';
 import HeroBanner from './components/HeroBanner';
-import PricingCard from './components/PricingCard';
 import ProfileCard from './components/ProfileCard';
 import SearchBar from './components/SearchBar';
 import StepsTimeline from './components/StepsTimeline';
@@ -15,13 +14,12 @@ export default function App() {
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '2rem', fontFamily: 'Inter, system-ui, sans-serif', display: 'grid', gap: '1.5rem' }}>
       <HeroBanner />
       <SearchBar />
-      <StatsPanel />
+      <StatsPanel from="App Component" />
       <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
         <SignupForm />
         <ContactForm />
         <ProfileCard />
-        <PricingCard />
-        <Checklist />
+        <LoadingResources />
         {/* 这3个组件没有调用，但还是需要预打包 */}
         {/* <TagInput />
         <UploadCard />

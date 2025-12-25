@@ -7,10 +7,12 @@ import { normalizePath } from 'vite';
 import * as esbuild from 'esbuild';
 import vueEsbuild from 'unplugin-vue/esbuild';
 import vueJsx from 'unplugin-vue-jsx/esbuild';
+import {VITE_CACHE_DIR, ASSET_EXTENSIONS, generateAssetLoaders} from './utils/constants.js'
 import {collectCss} from './utils/css.js'
 import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
 import type {EntryMeta, EntryMetaSerialized} from './types.js'
 import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
+import { console } from 'node:inspector';
 
 export interface PartialPrebundleOptions {
   includes: string[];
@@ -279,8 +281,14 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
               : path.resolve(base, args.path),
           );
 
+          if (ASSET_EXTENSIONS.some(ext => resolved.endsWith(`.${ext}`))) {
+            return {
+              path: resolved,
+              external: true,
+            };
+          }
+
           const targetPath = Array.from(targetEntries).find(key => key.includes(resolved))
-          console.log('targetPath', targetPath)
           if (targetPath) {
             return {
               path: targetPath,
@@ -301,6 +309,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       format: 'esm',
       platform: 'browser',
       target: 'esnext',
+      charset: 'utf8',
       splitting: false,
       sourcemap: 'inline',
       write: false,
@@ -315,6 +324,8 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         '.vue': 'ts',
         '.tsx': 'tsx',
         '.jsx': 'jsx',
+        // Asset loaders - generate separate files
+        ...generateAssetLoaders()
       },
     });
 
@@ -431,7 +442,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       root = normalizePath(resolved.root);
       cacheBase = normalizePath(
         options.cacheDir ??
-          path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), 'code-partial'),
+          path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), VITE_CACHE_DIR),
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
       externalPkgs = await resolveExternalPkgs(root, options.external);

@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
+import viteSVG from '../icons/vite.svg';
+import documentarywebp from '../images/documentary.jpg';
 
 const defaultItems = [
   '入口匹配到 glob',
@@ -31,6 +33,8 @@ export default function Checklist() {
           <span>{item}</span>
         </label>
       ))}
+      <img src={viteSVG} alt="Vite Logo" width={80} height={80} />
+      <img src={documentarywebp} alt="react bg img" width={80} height={80} />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import partialPrebundle from '../index.js';
+import { VITE_CACHE_DIR } from '../utils/constants.js';
 
 const writeFile = fs.writeFile;
 const mkdir = fs.mkdir;
@@ -32,7 +33,7 @@ describe('partial-prebundle glob + metadata', () => {
   beforeEach(async () => {
     tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'vp-prebundle-'));
     pluginCacheBase = path.join(tmp, 'node_modules/.vite');
-    cacheDir = path.join(pluginCacheBase, 'code-partial');
+    cacheDir = path.join(pluginCacheBase, VITE_CACHE_DIR);
     await createFile(
       tmp,
       'src/components/Keep.tsx',

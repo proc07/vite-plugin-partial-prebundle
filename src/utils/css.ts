@@ -1,4 +1,5 @@
 import type * as esbuild from 'esbuild';
+
 // esbuild 0.21 不用处理
 // esbuild 0.24 生成的 CSS sourcemap 注释样式变了（//# sourceMappingURL=...）
 export const collectCss = (files: esbuild.OutputFile[]): string => {
