@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import viteSVG from '../icons/vite.svg';
-import documentarywebp from '../images/documentary.jpg';
+import viteSVG from '../../icons/vite.svg';
+// import documentarywebp from '../images/documentary.jpg';
+import documentarywebp from '@/images/documentary.jpg';
 
 const defaultItems = [
   '入口匹配到 glob',

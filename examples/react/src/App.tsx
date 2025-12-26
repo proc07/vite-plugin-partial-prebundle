@@ -1,6 +1,6 @@
 import ContactForm from './components/ContactForm';
 import SignupForm from './components/SignupForm';
-import LoadingResources from './components/LoadingResources';
+import LoadingResources from './components/feature/LoadingResources';
 import HeroBanner from './components/HeroBanner';
 import ProfileCard from './components/ProfileCard';
 import SearchBar from './components/SearchBar';

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import glob from 'fast-glob';
-import type { ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite';
+import type { Alias, ModuleNode, Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 import { normalizePath } from 'vite';
 import * as esbuild from 'esbuild';
 import vueEsbuild from 'unplugin-vue/esbuild';
@@ -32,6 +32,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
   let externalPkgs: string[] = ['react/jsx-runtime'];
+  let aliasEntries: Alias[] = [];
 
   const includeRaw = options.includes ?? [];
   const excludeRaw = options.excludes ?? [];
@@ -268,6 +269,30 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
     // 为避免组件间互相内嵌，检测到 import 指向其他 targetEntries，会将该导入重写为 virtual:vp:<abs>.js 并标记 external。
     const ENTRY_EXTS = ['.ts', '.tsx', '.jsx', '.vue', '.js', '.mjs', '.cjs'];
+    const resolveWithAlias = (importer: string, spec: string) => {
+      let applied = spec;
+      for (const a of aliasEntries) {
+        if (typeof a.find === 'string') {
+          if (applied.startsWith(a.find)) {
+            applied = applied.replace(a.find, a.replacement);
+            break;
+          }
+        } else if (a.find.test(applied)) {
+          applied = applied.replace(a.find, a.replacement);
+          break;
+        }
+      }
+
+      if (!path.isAbsolute(applied) && applied.startsWith('/')) {
+        applied = path.join(root, applied.slice(1));
+      }
+
+      const base = path.dirname(importer);
+      return normalizePath(
+        path.isAbsolute(applied) ? applied : path.resolve(base, applied),
+      );
+    };
+
     const entryLinkerPlugin: esbuild.Plugin = {
       name: 'vp-entry-linker',
       setup(build) {
@@ -275,12 +300,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           if (!args.importer) return null;
           if (externalPkgs.includes(args.path)) return null;
 
-          const base = path.dirname(args.importer);
-          const rawPath = normalizePath(
-            path.isAbsolute(args.path)
-              ? args.path
-              : path.resolve(base, args.path),
-          );
+          const rawPath = resolveWithAlias(args.importer, args.path);
 
           if (ASSET_EXTENSIONS.some((ext) => rawPath.endsWith(`.${ext}`))) {
             return { path: rawPath, external: true };
@@ -291,7 +311,9 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
             return { path: targetPath, external: true };
           }
 
-          const candidates = ENTRY_EXTS.map((ext) => `${rawPath}${ext}`);
+          const candidates = path.extname(rawPath)
+            ? [rawPath]
+            : ENTRY_EXTS.map((ext) => `${rawPath}${ext}`);
           for (const candidate of candidates) {
             try {
               await fs.access(candidate);
@@ -450,7 +472,10 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), VITE_CACHE_DIR),
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
-      externalPkgs = await resolveExternalPkgs(root, [...externalPkgs, ...options.external ?? []]);
+      externalPkgs = await resolveExternalPkgs(root, [...externalPkgs, ...(options.external ?? [])]);
+      aliasEntries = Array.isArray(resolved.resolve?.alias)
+        ? resolved.resolve.alias
+        : [];
 
       await refreshEntryTargets();
       await loadMetadata().catch((err) => {
