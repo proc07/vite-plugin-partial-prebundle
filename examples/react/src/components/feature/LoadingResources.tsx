@@ -4,7 +4,7 @@ import viteSVG from '../../icons/vite.svg';
 // import documentarywebp from '../images/documentary.jpg';
 import documentarywebp from '@/images/documentary.jpg';
 
-const defaultItems = [
+export const defaultItems = [
   '入口匹配到 glob',
   '排除特定组件',
   '预构建输出缓存',

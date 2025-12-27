@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {styles} from '../common.styled'
-
+console.log(styles, 'profile card styles');
 export default function ProfileCard() {
   return (
     <div style={card} styles={styles.list}>

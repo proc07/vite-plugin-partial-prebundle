@@ -305,16 +305,17 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           if (ASSET_EXTENSIONS.some((ext) => rawPath.endsWith(`.${ext}`))) {
             return { path: rawPath, external: true };
           }
-
-          const targetPath = Array.from(targetEntries).find(key => key.includes(rawPath))
-          if (targetPath) {
-            return { path: targetPath, external: true };
-          }
-
-          const candidates = path.extname(rawPath)
+          // case: rawPath = '.../file.types' -> '.../file.types.ts'
+          const hasKnownExt = ENTRY_EXTS.some((ext) => rawPath.endsWith(ext));
+          const candidates = hasKnownExt
             ? [rawPath]
-            : ENTRY_EXTS.map((ext) => `${rawPath}${ext}`);
+            : [rawPath, ...ENTRY_EXTS.map((ext) => `${rawPath}${ext}`)];
+
           for (const candidate of candidates) {
+            if (targetEntries.has(candidate)) {
+              return { path: candidate, external: true };
+            }
+
             try {
               await fs.access(candidate);
               return { path: candidate, external: true };
@@ -472,7 +473,11 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           path.join(resolved.cacheDir ?? path.join(root, 'node_modules/.vite'), VITE_CACHE_DIR),
       );
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
-      externalPkgs = await resolveExternalPkgs(root, [...externalPkgs, ...(options.external ?? [])]);
+      externalPkgs = await resolveExternalPkgs(
+        root,
+        ['vue', 'react', 'react-dom', ...externalPkgs, ...(options.external ?? [])],
+        ['prop-types', 'react-is'],
+      );
       aliasEntries = Array.isArray(resolved.resolve?.alias)
         ? resolved.resolve.alias
         : [];

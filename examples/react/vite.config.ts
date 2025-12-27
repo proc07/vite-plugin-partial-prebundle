@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     partialPrebundle({
       includes: [
-        'src/components/*.tsx',
+        'src/components/**/*.tsx',
       ],
       excludes: [
         'src/components/ContactForm.tsx',

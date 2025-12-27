@@ -1,14 +1,15 @@
-import ContactForm from './components/ContactForm';
-import SignupForm from './components/SignupForm';
+import ContactForm from './components/ContactForm/ContactForm';
+import SignupForm from './components/SignupForm/SignupForm';
 import LoadingResources from './components/feature/LoadingResources';
 import HeroBanner from './components/HeroBanner';
 import ProfileCard from './components/ProfileCard';
 import SearchBar from './components/SearchBar';
+import StatsPanel from './components/StatsPanel';
+
 import StepsTimeline from './components/StepsTimeline';
 import TagInput from './components/TagInput';
 import UploadCard from './components/UploadCard';
-import StatsPanel from './components/StatsPanel';
-
+ 
 export default function App() {
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '2rem', fontFamily: 'Inter, system-ui, sans-serif', display: 'grid', gap: '1.5rem' }}>
