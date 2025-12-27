@@ -6,13 +6,18 @@ export default defineConfig({
   plugins: [
     partialPrebundle({
       includes: [
-        'src/components/**/*.tsx',
+        'src/components/*.tsx',
+        // 'src/components/*/*.tsx',
+        'src/components/ContactForm/ContactForm.tsx',
+        'src/components/SignupForm/SignupForm.tsx',
+        'src/components/LoadingResources/LoadingResources.tsx',
       ],
       excludes: [
-        'src/components/ContactForm.tsx',
-        'src/components/SignupForm.tsx',
-        // 'src/components/StepsTimeline.tsx',
-      ]
+        // 'src/components/ContactForm/ContactForm.tsx',
+        // 'src/components/SignupForm/SignupForm.tsx',
+        'src/components/StepsTimeline.tsx',
+      ],
+      internal: []
     }),
     react(),
   ],

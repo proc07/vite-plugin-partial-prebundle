@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties, ChangeEvent } from 'react';
 import StatsPanel from './StatsPanel';
-import {defaultItems} from './feature/LoadingResources';
+import {defaultItems} from './LoadingResources/LoadingResources';
 
 console.log(defaultItems, 'LoadingResources');
 

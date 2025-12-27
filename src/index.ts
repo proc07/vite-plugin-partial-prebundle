@@ -18,6 +18,7 @@ export interface PartialPrebundleOptions {
   excludes?: string[];
   injectStyles?: boolean;
   cacheDir?: string;
+  internal?: string[];
   external?: string[];
 }
 
@@ -58,7 +59,13 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
   const toAbsolute = (p: string): string => {
     if (!p) return p;
-    if (path.isAbsolute(p)) return normalizePath(p);
+    if (path.isAbsolute(p)) {
+      // 路径以 / 开头但不含 root 时，视为相对 root 的绝对形式
+      if (!p.startsWith(root)) {
+        return normalizePath(path.join(root, p.slice(1)));
+      }
+      return normalizePath(p);
+    }
     const colonIdx = p.indexOf(':');
     if (colonIdx > 0 && colonIdx < p.length - 1) {
       const prefix = p.slice(0, colonIdx + 1);
@@ -137,8 +144,12 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     const hash = stableHash(entry);
     const output = normalizePath(path.join(cacheBase, `vp-${hash}.js`));
     const styleId = `vp-style-${hash}`;
-    const virtualId = `${VIRTUAL_PREFIX}${entry}.js`;
-    return { hash, output, styleId, virtualId };
+    const relEntry = toRelative(entry);
+    const virtualSuffix = relEntry.startsWith('/')
+      ? relEntry
+      : `/${relEntry}`;
+    const virtualId = `${VIRTUAL_PREFIX}${virtualSuffix}.js`;
+    return { hash, output, styleId, virtualId, relEntry };
   };
 
   const saveMetadata = async () => {
@@ -191,7 +202,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           output: toAbsolute(meta.output),
           deps: new Set([...meta.deps].map(toAbsolute)),
           hash: meta.hash,
-          virtualId: toAbsolute(meta.virtualId),
+          virtualId: meta.virtualId,
           styleId: meta.styleId,
         });
 
@@ -264,8 +275,9 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   };
 
   const buildEntry = async (entry: string) => {
-    const { hash, output: outFile, styleId, virtualId } = getEntryPaths(entry);
+    const { hash, output: outFile, styleId, virtualId, relEntry } = getEntryPaths(entry);
     const isVue = entry.endsWith('.vue');
+    const entryDir = normalizePath(path.dirname(entry));
 
     // 为避免组件间互相内嵌，检测到 import 指向其他 targetEntries，会将该导入重写为 virtual:vp:<abs>.js 并标记 external。
     const ENTRY_EXTS = ['.ts', '.tsx', '.jsx', '.vue', '.js', '.mjs', '.cjs'];
@@ -299,13 +311,17 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         build.onResolve({ filter: /.*/ }, async (args) => {
           if (!args.importer) return null;
           if (externalPkgs.includes(args.path)) return null;
+          if (options?.internal?.includes(args.path)) return { path: args.path, external: false };
 
           const rawPath = resolveWithAlias(args.importer, args.path);
 
           if (ASSET_EXTENSIONS.some((ext) => rawPath.endsWith(`.${ext}`))) {
-            return { path: rawPath, external: true };
+            const rel = toRelative(rawPath);
+            const shortPath = rel.startsWith('/') ? rel : `/${rel}`;
+            return { path: shortPath, external: true };
           }
           // case: rawPath = '.../file.types' -> '.../file.types.ts'
+          // case: rawPath = '.../component' -> '.../component.tsx'
           const hasKnownExt = ENTRY_EXTS.some((ext) => rawPath.endsWith(ext));
           const candidates = hasKnownExt
             ? [rawPath]
@@ -313,12 +329,27 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
           for (const candidate of candidates) {
             if (targetEntries.has(candidate)) {
-              return { path: candidate, external: true };
+              return {
+                path: `${VIRTUAL_PREFIX}/${toRelative(candidate)}.js`,
+                external: true,
+              };
             }
 
             try {
               await fs.access(candidate);
-              return { path: candidate, external: true };
+              const inEntryScope =
+                candidate === entry ||
+                candidate.startsWith(`${entryDir}/`);
+              if (inEntryScope) {
+                // bundle 组件目录内的依赖
+                return { path: candidate, external: false };
+              }
+
+              const rel = normalizePath(path.relative(root, candidate));
+              const shortPath = rel.startsWith('/')
+                ? rel
+                : `/${rel}`;
+              return { path: shortPath, external: true };
             } catch {
               // not found, continue
             }
@@ -386,6 +417,10 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       styleId,
     });
     await queueMetadataSave();
+
+    config?.logger?.info?.(
+      `[vite-plugin-partial-prebundle] built ${toRelative(entry)}`,
+    );
   };
 
   const ensureBuild = async (entry: string) => {
@@ -475,8 +510,8 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       metadataPath = normalizePath(path.join(cacheBase, '_metadata.json'));
       externalPkgs = await resolveExternalPkgs(
         root,
-        ['vue', 'react', 'react-dom', ...externalPkgs, ...(options.external ?? [])],
-        ['prop-types', 'react-is'],
+        [...externalPkgs, ...(options.external ?? [])],
+        [], // exclude
       );
       aliasEntries = Array.isArray(resolved.resolve?.alias)
         ? resolved.resolve.alias
@@ -511,16 +546,19 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       const entry = await matchEntry(source, importer, this.resolve, this);
       if (!entry) return null;
 
-      return `${VIRTUAL_PREFIX}${entry}.js`;
+      const relEntry = toRelative(entry);
+      const suffix = relEntry.startsWith('/') ? relEntry : `/${relEntry}`;
+      return `${VIRTUAL_PREFIX}${suffix}.js`;
     },
 
     async load(id) {
       if (!serveMode || !id.startsWith(VIRTUAL_PREFIX)) return null;
 
       const request = id.slice(VIRTUAL_PREFIX.length);
-      const entry = request.endsWith('.js')
+      const relEntry = request.endsWith('.js')
         ? request.slice(0, -3)
         : request;
+      const entry = toAbsolute(relEntry);
 
       if (!targetEntries.has(entry)) return null;
 

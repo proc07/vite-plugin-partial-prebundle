@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { CSSProperties, FormEvent } from 'react';
+import type { FormEvent } from 'react';
+import { cardStyle, titleStyle, labelStyle, inputStyle, buttonStyle, hintStyle } from './style';
 
 export default function SignupForm() {
   const [name, setName] = useState('');
@@ -45,42 +46,3 @@ export default function SignupForm() {
   );
 }
 
-const cardStyle: CSSProperties = {
-  border: '1px solid #e5e7eb',
-  borderRadius: 12,
-  padding: '1.5rem',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.04)',
-  background: 'white',
-};
-
-const titleStyle: CSSProperties = { marginTop: 0, marginBottom: '1rem' };
-
-const labelStyle: CSSProperties = {
-  display: 'grid',
-  gap: 6,
-  marginBottom: 12,
-  color: '#374151',
-  fontSize: 14,
-};
-
-const inputStyle: CSSProperties = {
-  padding: '10px 12px',
-  borderRadius: 8,
-  border: '1px solid #d1d5db',
-};
-
-const buttonStyle: CSSProperties = {
-  marginTop: 6,
-  padding: '10px 14px',
-  borderRadius: 8,
-  border: 'none',
-  background: '#2563eb',
-  color: 'white',
-  cursor: 'pointer',
-};
-
-const hintStyle: CSSProperties = {
-  marginTop: 12,
-  color: '#2563eb',
-  fontSize: 13,
-};
