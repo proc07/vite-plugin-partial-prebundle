@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import partialPrebundle from 'vite-plugin-partial-prebundle';
+import partialPrebundle, {getAllComponentPaths} from 'vite-plugin-partial-prebundle';
+
+getAllComponentPaths('src/components/*')
 
 export default defineConfig({
   plugins: [

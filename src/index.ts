@@ -12,6 +12,9 @@ import {collectCss} from './utils/css.js'
 import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
 import type {EntryMeta, EntryMetaSerialized} from './types.js'
 import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
+import { getAllComponentPaths } from './scripts/gen-includes.js';
+
+export { getAllComponentPaths };
 
 export interface PartialPrebundleOptions {
   includes: string[];

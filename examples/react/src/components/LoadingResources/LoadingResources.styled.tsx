@@ -19,6 +19,6 @@ const test = [
   'Loading component C...',
   'Loading component D...',
   'Loading component E...',
-];  
+];
 
-export default { buttonprops, listprops, test };
+export { buttonprops, listprops, test };

@@ -16,6 +16,7 @@
 <script setup lang="ts">
 import FeedbackForm from './components/FeedbackForm.vue';
 import RegistrationForm from './components/RegistrationForm.vue';
+import Input from './components/Input/index.vue';
 </script>
 
 <style scoped>

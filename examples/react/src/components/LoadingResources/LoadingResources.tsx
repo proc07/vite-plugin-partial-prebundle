@@ -3,6 +3,9 @@ import type { CSSProperties } from 'react';
 import viteSVG from '../../icons/vite.svg';
 // import documentarywebp from '../images/documentary.jpg';
 import documentarywebp from '@/images/documentary.jpg';
+import { buttonprops } from './LoadingResources.styled';
+
+console.log('LoadingResources: buttonprops', buttonprops);
 
 export const defaultItems = [
   '入口匹配到 glob',
