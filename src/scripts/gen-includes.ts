@@ -8,31 +8,36 @@ import glob from 'fast-glob';
 
 type Ext = 'tsx' | 'jsx' | 'vue';
 
-const hasFile = async (pattern: string) => (await glob(pattern)).length > 0;
+const isSimpleName = (file: string) => path.basename(file).split('.').length === 2;
 
 async function collectEntries(dir: string, ext: Ext, acc: Set<string>) {
   const base = path.basename(dir);
   const capBase = base ? `${base[0].toUpperCase()}${base.slice(1)}` : base;
   const preferredNames = [
+    `index.ts`,
     `index.${ext}`,
     `${base}.${ext}`,
     `${capBase}.${ext}`,
   ];
 
-  const immediateFiles = await glob(`${dir}/*.${ext}`, {
-    onlyFiles: true,
-    deep: 0,
-  });
-
-  const preferred = immediateFiles.filter((file) =>
+  const immediateFiles = await glob(
+    [`${dir}/*.${ext}`, `${dir}/index.ts`],
+    {
+      onlyFiles: true,
+      deep: 0,
+    },
+  );
+  const simpleFiles = immediateFiles.filter(isSimpleName);
+  
+  const preferred = simpleFiles.find((file) =>
     preferredNames.includes(path.basename(file)),
   );
-  if (preferred.length) {
-    preferred.forEach((f) => acc.add(f));
+  if (preferred) {
+    acc.add(preferred);
     return;
   }
 
-  if (immediateFiles.length === 0) {
+  if (simpleFiles.length === 0) {
     const children = await glob(`${dir}/*`, { onlyDirectories: true, deep: 0 });
     for (const child of children) {
       await collectEntries(child, ext, acc);
@@ -40,10 +45,10 @@ async function collectEntries(dir: string, ext: Ext, acc: Set<string>) {
     return;
   }
 
-  if (immediateFiles.length === 1) {
-    acc.add(immediateFiles[0]);
+  if (simpleFiles.length === 1) {
+    acc.add(simpleFiles[0]);
   } else {
-    immediateFiles.forEach((f) => acc.add(f));
+    simpleFiles.forEach((f) => acc.add(f));
   }
 
   const children = await glob(`${dir}/*`, { onlyDirectories: true, deep: 0 });
@@ -63,6 +68,6 @@ export async function getAllComponentPaths(
     await collectEntries(dir, ext, files);
   }
 
-  console.log('getAllComponentPaths:', JSON.stringify([...files], null, 2));
+  console.log('getAllComponentPaths:', JSON.stringify([...files], null, 2), files.size);
   return [...files];
 }
