@@ -43,6 +43,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   const targetEntries = new Set<string>();
   const entryMeta = new Map<string, EntryMeta>();
   const depToEntries = new Map<string, Set<string>>();
+  const outputCache = new Map<string, string>();
   // 防止同一个入口被并发重复构建
   const inflightBuilds = new Map<string, Promise<void>>();
 
@@ -151,7 +152,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     const virtualSuffix = relEntry.startsWith('/')
       ? relEntry
       : `/${relEntry}`;
-    const virtualId = `${VIRTUAL_PREFIX}${virtualSuffix}.js`;
+    const virtualId = `${VIRTUAL_PREFIX}${virtualSuffix}`;
     return { hash, output, styleId, virtualId, relEntry };
   };
 
@@ -271,6 +272,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     }
     try {
       await fs.unlink(meta.output);
+      outputCache.delete(meta.output);
     } catch {
       // ignore
     }
@@ -333,7 +335,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
           for (const candidate of candidates) {
             if (targetEntries.has(candidate)) {
               return {
-                path: `${VIRTUAL_PREFIX}/${toRelative(candidate)}.js`,
+                path: `${VIRTUAL_PREFIX}/${toRelative(candidate)}`,
                 external: true,
               };
             }
@@ -408,6 +410,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
     await fs.mkdir(cacheBase, { recursive: true });
     await fs.writeFile(outFile, contents, 'utf8');
+    outputCache.set(outFile, contents);
 
     const deps = collectDepsFromMetafile(entry, buildResult.metafile);
     updateDepIndex(entry, deps);
@@ -551,16 +554,13 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
       const relEntry = toRelative(entry);
       const suffix = relEntry.startsWith('/') ? relEntry : `/${relEntry}`;
-      return `${VIRTUAL_PREFIX}${suffix}.js`;
+      return `${VIRTUAL_PREFIX}${suffix}`;
     },
 
     async load(id) {
       if (!serveMode || !id.startsWith(VIRTUAL_PREFIX)) return null;
 
-      const request = id.slice(VIRTUAL_PREFIX.length);
-      const relEntry = request.endsWith('.js')
-        ? request.slice(0, -3)
-        : request;
+      const relEntry = id.slice(VIRTUAL_PREFIX.length);
       const entry = toAbsolute(relEntry);
 
       if (!targetEntries.has(entry)) return null;
@@ -575,7 +575,12 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
         return null;
       }
 
-      return await fs.readFile(output, 'utf8');
+      const cached = outputCache.get(output);
+      if (cached) return cached;
+
+      const code = await fs.readFile(output, 'utf8');
+      outputCache.set(output, code);
+      return code;
     },
 
     async handleHotUpdate(ctx) {
