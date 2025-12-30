@@ -505,6 +505,33 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     apply: 'serve',
     enforce: 'pre',
 
+    configureServer(server) {
+      // 添加强缓存 + 协商缓存
+      const setCache = (res: any, hash: string | null | undefined) => {
+        if (!hash) return;
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('ETag', `"vp-${hash}"`);
+      };
+
+      server.middlewares.use((req, res, next) => {
+        const rawUrl = decodeURIComponent(req.url || '');
+        const url = rawUrl.split('?')[0] || '';
+        let hash: string | null = null;
+
+        if (url.startsWith('/@id/virtual:vp:')) {
+          const rel = url.slice('/@id/virtual:vp:'.length);
+          const entry = toAbsolute(rel);
+          const meta = entryMeta.get(entry);
+          hash = meta?.hash ?? null;
+        } else if (url.includes(`/${VITE_CACHE_DIR}/vp-`)) {
+          const m = url.match(/vp-([a-f0-9]{8})\.js/);
+          if (m) hash = m[1];
+        }
+
+        setCache(res, hash);
+        next();
+      });
+    },
     async configResolved(resolved) {
       config = resolved;
       serveMode = resolved.command === 'serve';
