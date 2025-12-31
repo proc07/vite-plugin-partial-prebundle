@@ -21,10 +21,10 @@ export default function App() {
         <ContactForm />
         <ProfileCard />
         <LoadingResources />
-        {/* 这3个组件没有调用，但还是需要预打包 */}
-        {/* <TagInput />
+        <TagInput />
         <UploadCard />
-        <StepsTimeline /> */}
+        {/* 这3个组件没有调用，但还是需要预打包 */}
+        {/* <StepsTimeline /> */}
       </div>
     </div>
   );

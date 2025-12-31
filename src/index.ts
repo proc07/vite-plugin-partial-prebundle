@@ -13,6 +13,7 @@ import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
 import type {EntryMeta, EntryMetaSerialized} from './types.js'
 import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
 import { getAllComponentPaths } from './scripts/gen-includes.js';
+import { log } from 'node:console';
 
 export { getAllComponentPaths };
 
@@ -40,6 +41,13 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
 
   const includeRaw = options.includes ?? [];
   const excludeRaw = options.excludes ?? [];
+  // 配置指纹，用于检测配置变更
+  const configSig = stableHash(
+    JSON.stringify({
+      includes: includeRaw,
+      excludes: excludeRaw,
+    }),
+  );
   const targetEntries = new Set<string>();
   const entryMeta = new Map<string, EntryMeta>();
   const depToEntries = new Map<string, Set<string>>();
@@ -171,7 +179,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
       };
     }
 
-    const payload = JSON.stringify({ entries }, null, 2);
+    const payload = JSON.stringify({ configSig, entries }, null, 2);
     await fs.mkdir(cacheBase, { recursive: true });
     await fs.writeFile(metadataPath, payload, 'utf8');
   };
@@ -194,9 +202,16 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
     try {
       const raw = await fs.readFile(metadataPath, 'utf8');
       const json = JSON.parse(raw) as {
+        configSig?: string;
         entries?: Record<string, EntryMetaSerialized>;
       };
 
+      if (json.configSig && json.configSig !== configSig) {
+        config?.logger.warn?.(
+          `[vite-plugin-partial-prebundle] config changed, skipping metadata`,
+        );
+        return;
+      }
       if (!json.entries) return;
 
       for (const [relEntry, meta] of Object.entries(json.entries)) {
