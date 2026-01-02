@@ -13,7 +13,6 @@ import {styleInjector, buildVueHmrSnippet} from './utils/hmr.js'
 import type {EntryMeta, EntryMetaSerialized} from './types.js'
 import {stripQuery, stableHash, resolveExternalPkgs} from './utils/path-utils.js'
 import { getAllComponentPaths } from './scripts/gen-includes.js';
-import { log } from 'node:console';
 
 export { getAllComponentPaths };
 
@@ -36,7 +35,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   // 多次并发写入导致内容被覆盖，改为串行写入
   let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
-  let externalPkgs: string[] = ['react/jsx-runtime'];
+  let externalPkgs: string[] = ['@babel', 'react-is', 'prop-types', 'react/jsx-runtime', 'react-router', 'history'];
   let aliasEntries: Alias[] = [];
 
   const includeRaw = options.includes ?? [];
