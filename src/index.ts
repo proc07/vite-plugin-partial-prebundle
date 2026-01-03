@@ -35,7 +35,7 @@ export function partialPrebundle(options: PartialPrebundleOptions): Plugin {
   // 多次并发写入导致内容被覆盖，改为串行写入
   let metadataWrite: Promise<void> = Promise.resolve();
   let serveMode = false;
-  let externalPkgs: string[] = ['@babel', 'react-is', 'prop-types', 'react/jsx-runtime', 'react-router', 'history'];
+  let externalPkgs: string[] = ['@babel', 'react-is', 'prop-types', 'hoist-non-react-statics', 'react/jsx-runtime', 'react-router', 'history'];
   let aliasEntries: Alias[] = [];
 
   const includeRaw = options.includes ?? [];
